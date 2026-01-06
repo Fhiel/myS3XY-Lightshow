@@ -1,0 +1,13 @@
+{
+  "name": "S3XY Front",
+  "data_pin": 10,
+  "channel_offset": 120,
+  "leds": [
+    {"channel": 0},   
+    {"channel": 3},   
+    {"channel": 6},  
+    {"channel": 9},   
+    {"channel": 12},  
+    {"channel": 15}   
+  ]
+}
