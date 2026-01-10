@@ -1,29 +1,55 @@
-# myS3XY-Lightshow
+# 🚗 myS3XY-Lightshow
 
 An open-source companion for Tesla Light Shows – bring the spectacular synchronized light show experience to **any vehicle**, RC car, or custom LED setup.
 
+
+
 This project turns an inexpensive ESP32-C3 board with a small OLED display into a fully featured light show controller that:
-- Plays official Tesla multi-car FSEQ files (Trans-Siberian Orchestra, Sandstorm, etc.)
-- Perfectly synchronizes with real Teslas using NTP time (just like the original)
-- Offers a Tesla-style web app for selecting configurations and scheduling start time (up to 10 minutes ahead)
-- Displays the authentic Tesla countdown (MM:SS → large seconds → "GO!")
-- Supports flexible LED mapping via simple JSON config files (front only, rear only, full vehicle, custom layouts)
-- Allows wireless over-the-air updates for new shows and configs (no cable needed after initial setup)
+- **NTP-Synced:** Perfectly synchronizes with real Teslas using Network Time Protocol.
+- **Universal FSEQ:** Plays official Tesla multi-car FSEQ files (V1 Uncompressed).
+- **Mobile Web App:** Tesla-style interface for selecting shows, hardware configs, and scheduling.
+- **Smart Time Sync:** Automatically calculates UTC start times from your smartphone browser—no timezone settings required.
+- **OLED Feedback:** Authentic Tesla-style countdown (MM:SS → Large Seconds → "GO!").
+- **Flexible Mapping:** Map any LED to any Tesla channel via simple JSON files.
+- **Wireless Updates:** Full OTA (Over-the-Air) support for firmware, shows, and configurations.
 
-Perfect for:
-- Joining a real Tesla light show with a second (non-Tesla) car
-- Adding extra lights to your Tesla
-- Building amazing RC car light shows
-- Any creative LED project that wants Tesla-level synchronization
+---
 
-### Features
-- NTP-based precise timing (same as Tesla)
-- Tesla-accurate countdown on built-in OLED
-- Web interface for show selection and scheduling
-- ElegantOTA for wireless firmware & file updates
-- Configurable LED mapping (front/rear/custom)
-- Works with single or multiple FSEQ files
+## 🛠️ Hardware Requirements
+- **Microcontroller:** ESP32-C3 (e.g., Seeed Studio XIAO or SuperMini).
+- **Display:** SSD1306 128x64 I2C OLED.
+- **LEDs:** WS2812B (NeoPixel) strip (tested up to 64 LEDs via USB power).
+- **Total Cost:** Under 10 €.
 
-Hardware: Cheap ESP32-C3 + WS2812B LEDs – total cost under 10 €.
+---
 
-Let’s make every car part of the show! 🚗💡
+## 📂 Configuration Guide (Custom LED Layouts)
+
+The system uses **Absolute Mapping (Offset 0)**. This means you map your physical LEDs directly to the global Tesla channel map found in the FSEQ file.
+
+### Common Tesla Channel Map (Absolute)
+| Function | Physical Channel | Expected Color Logic |
+| :--- | :--- | :--- |
+| **Front Indicators** | 139 (L), 142 (R) | Amber |
+| **Signature / DRL** | 151 - 160 | Cold White |
+| **Main Beams / Fog** | 184 - 192 | Bright White |
+| **Tail / Brake Lights** | 164 - 183 | Red |
+| **Rear Indicators** | 339 (L), 342 (R) | Amber |
+| **Reverse Lights** | 390 - 392 | White |
+
+
+
+### Example `config.json`
+```json
+{
+  "name": "Tesla_64_Symmetric",
+  "data_pin": 10,
+  "max_brightness": 128,
+  "max_milliamps": 2500,
+  "channel_offset": 0,
+  "leds": [
+    {"channel": 139},
+    {"channel": 164},
+    {"channel": 9999}
+  ]
+}

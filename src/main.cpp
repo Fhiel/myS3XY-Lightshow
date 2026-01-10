@@ -20,6 +20,15 @@ const char* password = "mys3xyls";
 #define SCHEDULED_START true
 #define MINUTES_AHEAD 5   // Default scheduled minutes ahead
 
+#define FRAME_BUFFER_SIZE 512 
+uint8_t frameData[FRAME_BUFFER_SIZE];
+
+#define BUFFER_SIZE 15        // Number of frames to cache
+uint8_t frameBuffer[BUFFER_SIZE][256]; // Adjust 256 to your max scanned channel count
+uint32_t bufferedFrameIdx[BUFFER_SIZE];
+int bufferHead = 0;           // Where we write into
+int bufferTail = 0;           // Where we read from
+
 // OLED (visible area 72x40 in 132x64 buffer)
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ 6, /* data=*/ 5);
 
@@ -30,7 +39,7 @@ const int yOffset = 12;  // (64 - 40) / 2
 
 // -----------------------------------------------------
 
-CRGB leds[50];  // Buffer for max 50 LEDs (adjusted dynamically by config)
+CRGB leds[100];  // Buffer for max 100 LEDs (adjusted dynamically by config)
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", 3600, 60000);  // UTC+1 (CET)
@@ -42,10 +51,14 @@ uint32_t channelCount = 0;
 uint32_t frameCount = 0;
 uint16_t stepTimeMs = 50;
 
-unsigned long showStartEpoch = 0;
+
 bool showRunning = false;
 bool triggerCountdown = false;  // New: Signal to start the countdown
+bool isBusy = false; // To prevent overlapping operations
+unsigned long showStartEpoch = 0;
+unsigned long showStartTimeMillis = 0; // Stores the exact millisecond of the start
 unsigned long lastOledUpdate = 0;
+uint8_t maxValues[200]; // Storage for peak values of the first 200 channels
 uint32_t currentFrame = 0; // Track current frame globally
 
 // ------------------- Config Structure -------------------
@@ -57,12 +70,15 @@ struct Config {
   String name = "Default";
   uint8_t data_pin = DATA_PIN;
   uint16_t channel_offset = 0;
+  uint8_t max_brightness = 128;   // Default brightness
+  uint16_t max_milliamps = 500;   // Default power limit
   std::vector<LedMapping> leds;
 };
 
 Config currentConfig;
 String currentConfigFile = "/test.json";  // Default config
 String currentShow = "/show.fseq";  // Default FSEQ-file
+String lastUploadedFilename = ""; 
 
 String getStorageInfo() {
     size_t total = LittleFS.totalBytes();
@@ -89,27 +105,54 @@ String getSystemStatus() {
     return "🟢 READY";
 }
 
+String getConfigSummary(String filename) {
+    File file = LittleFS.open("/" + filename, "r");
+    if (!file) return "Error opening file";
+
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+
+    if (error) return "Invalid JSON Structure";
+
+    String name = doc["name"] | "Unknown";
+    int ledsCount = doc["leds"].size();
+    int dataPin = doc["data_pin"] | 0;
+
+    return "<b>" + name + "</b>: " + String(ledsCount) + " LEDs (Pin " + String(dataPin) + ")";
+}
+
+void applyPowerSettings() {
+  // Set global brightness (0-255)
+  // Default to 128 if not specified in JSON
+  FastLED.setBrightness(currentConfig.max_brightness);
+
+  // Apply power management
+  // This calculates the power draw and dims LEDs if they exceed the limit
+  // Default to 500mA for safety
+  FastLED.setMaxPowerInVoltsAndMilliamps(5, currentConfig.max_milliamps);
+}
+
 bool loadConfig(const String& filename) {
   File file = LittleFS.open(filename, "r");
-  if (!file) {
-    Serial.println("Config " + filename + " not found");
-    return false;
-  }
-
+  if (!file) return false;
+  
   JsonDocument doc;
   DeserializationError error = deserializeJson(doc, file);
   file.close();
 
-  if (error) {
-    Serial.println("JSON error in " + filename + ": " + error.c_str());
-    return false;
-  }
+  if (error) return false;
 
   currentConfig.name = doc["name"] | "Unknown";
   currentConfig.data_pin = doc["data_pin"] | DATA_PIN;
   currentConfig.channel_offset = doc["channel_offset"] | 0;
 
+  // Read new safety settings with sensible fallbacks
+  currentConfig.max_brightness = doc["max_brightness"] | 128;
+  currentConfig.max_milliamps = doc["max_milliamps"] | 500;
+
   currentConfig.leds.clear();
+  currentConfig.leds.reserve(doc["leds"].size());
   JsonArray arr = doc["leds"];
   for (JsonObject obj : arr) {
     LedMapping m;
@@ -117,6 +160,10 @@ bool loadConfig(const String& filename) {
     currentConfig.leds.push_back(m);
   }
 
+  applyPowerSettings(); 
+  
+  Serial.printf("Config Applied: %s, MaxBrightness: %u, PowerLimit: %umA\n", 
+                currentConfig.name.c_str(), currentConfig.max_brightness, currentConfig.max_milliamps);
   Serial.println("Loaded config: " + currentConfig.name + " (" + String(currentConfig.leds.size()) + " LEDs)");
   return true;
 }
@@ -151,342 +198,440 @@ void showIP() {
 }
 
 bool readFseqHeader() {
-  if (!fseqFile) return false;
+  if (!fseqFile) {
+    showStatus("Err: File NULL");
+    return false;
+  }
 
   uint8_t header[28];
   fseqFile.seek(0);
-  if (fseqFile.read(header, 28) != 28) return false;
+  if (fseqFile.read(header, 28) != 28) {
+    showStatus("Err: Header Read");
+    return false;
+  }
+
+  // Magic Cookie Check: FSEQ Dateien starten immer mit 'P', 'S', 'E', 'Q'
+  if (header[0] != 'P' || header[1] != 'S') {
+    showStatus("Err: No FSEQ");
+    return false;
+  }
 
   channelCount = header[10] | (header[11] << 8) | (header[12] << 16) | (header[13] << 24);
   frameCount   = header[14] | (header[15] << 8) | (header[16] << 16) | (header[17] << 24);
   stepTimeMs   = header[18] | (header[19] << 8);
+  uint8_t compression = header[20]; 
 
-  Serial.printf("FSEQ loaded: %lu channels, %lu frames, %u ms/step\n", channelCount, frameCount, stepTimeMs);
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x10_tr);
+  u8g2.setCursor(xOffset, yOffset + 22);
+  u8g2.print("Ch: "); u8g2.print(channelCount);
+  u8g2.setCursor(xOffset, yOffset + 34);
+  u8g2.print("Fr: "); u8g2.print(frameCount);
+  u8g2.setCursor(xOffset, yOffset + 46);
+  u8g2.print("Comp: "); u8g2.print(compression); 
+  u8g2.sendBuffer();
+  
+  delay(3000); 
+
+  // Wenn compression > 0 ist, ist die Datei für uns unlesbar (Zstd)
+  if (compression != 0) return false;
+  
+  // Wenn channelCount 0 ist, ist es ein V2 Sparse Format
+  if (channelCount == 0) return false;
+
   return true;
 }
 
+/**
+ * Plays a single frame by reading the entire channel block into a RAM buffer first.
+ * This prevents the ESP32-C3 from crashing due to too many file seeks.
+ */
+/*
 bool playFrame(uint32_t frameIdx) {
-  // Prüfen, ob die aktuelle FSEQ-Datei die richtige ist
-  if (!fseqFile || currentShow != fseqFile.name()) {
-    if (fseqFile) {
-      fseqFile.close();
-      Serial.println("Closed old FSEQ");
-    }
-    fseqFile = LittleFS.open(currentShow, "r");
-    if (!fseqFile) {
-      Serial.println("ERROR: Cannot open " + currentShow);
-      showStatus("FSEQ error");
-      return false;
-    }
-    Serial.println("Opened new FSEQ: " + currentShow);
-    if (!readFseqHeader()) {
-      Serial.println("ERROR: Failed to read FSEQ header");
-      return false;
-    }
-  }
+    // 1. SAFETY CHECK
+    if (!fseqFile || frameIdx >= frameCount) return false;
 
-  uint32_t frameOffsetBase = 28 + frameIdx * channelCount;
-
-  for (size_t i = 0; i < currentConfig.leds.size(); i++) {
-    uint32_t ch = currentConfig.leds[i].channel + currentConfig.channel_offset;
-    uint32_t offset = frameOffsetBase + ch;
-
-    if (offset + 2 >= fseqFile.size()) {
-      leds[i] = CRGB::Black;
-      continue;
+    // 2. FILE POSITIONING
+    // FSEQ Header is 28 bytes. Each frame has 'channelCount' bytes.
+    uint32_t frameOffsetBase = 28 + (frameIdx * channelCount);
+    uint32_t startByteInFrame = currentConfig.channel_offset;
+    
+    // Efficient Jump: Only seek if we are not already at the right position
+    uint32_t targetPos = frameOffsetBase + startByteInFrame;
+    if (fseqFile.position() != targetPos) {
+        if (!fseqFile.seek(targetPos)) return false;
     }
 
-    fseqFile.seek(offset);
-    uint8_t r, g, b;
-    fseqFile.read(&r, 1);
-    fseqFile.read(&g, 1);
-    fseqFile.read(&b, 1);
-    leds[i] = CRGB(r, g, b);
-  }
+    // 3. BLOCK READING
+    // We read a 256-byte block. This covers almost all Front/Rear channels 
+    // in one single fast hardware access.
+    size_t toRead = 256; 
+    if (startByteInFrame + toRead > channelCount) {
+        toRead = (channelCount > startByteInFrame) ? (channelCount - startByteInFrame) : 0;
+    }
 
-  FastLED.show();
-  return (frameIdx + 1) < frameCount;
+    if (toRead > 0) {
+        fseqFile.read(frameData, toRead);
+    }
+
+    // 4. CALCULATE LED COLORS (Optimized Loop)
+    for (size_t i = 0; i < currentConfig.leds.size(); i++) {
+        uint16_t rawCh = currentConfig.leds[i].channel;
+        
+        if (rawCh == 9999) {
+            leds[i] = CRGB::Black;
+            continue;
+        }
+
+        // Fast data fetch from our local block
+        uint8_t val = (rawCh < toRead) ? frameData[rawCh] : 0;
+
+        // --- UNIVERSAL S3XY COLOR LOGIC (FRONT & REAR) ---
+
+        // A. AMBER: Indicators (Front 18-23 & Rear 72-77)
+        if ((rawCh >= 18 && rawCh <= 23) || (rawCh >= 72 && rawCh <= 77)) {
+            leds[i] = CRGB(val, (val * 160) >> 8, 0); 
+        }
+        // B. PURE WHITE: Beams & Fog (0-11, 24-47) + Reverse (84-87)
+        else if ((rawCh >= 0 && rawCh <= 11) || (rawCh >= 24 && rawCh <= 47) || (rawCh >= 84 && rawCh <= 87)) {
+            leds[i] = CRGB(val, val, val); 
+        }
+        // C. COLD WHITE: Signature/DRL (Channels 12-17)
+        else if (rawCh >= 12 && rawCh <= 17) {
+            leds[i] = CRGB((val * 200) >> 8, (val * 200) >> 8, val); 
+        }
+        // D. RED: Rear Lights (Tail 60-71, Brake 78-81, CHMSL 93, Fog 96)
+        else if ((rawCh >= 60 && rawCh <= 71) || (rawCh >= 78 && rawCh <= 81) || rawCh == 93 || rawCh == 96) {
+            leds[i] = CRGB(val, 0, 0);
+        }
+        // E. FALLBACK: Defaults to Red
+        else {
+            leds[i] = CRGB(val, 0, 0);
+        }
+    }
+
+    // 5. OUTPUT
+    FastLED.show();
+
+    // Return true if there's a next frame
+    return (frameIdx + 1) < frameCount;
+}
+*/
+/*
+// with scan reporting
+bool playFrame(uint32_t frameIdx) {
+    if (!fseqFile || frameIdx >= frameCount) return false;
+
+    // 1. ABSOLUTE POSITIONING (Ignoring JSON Offset for this test)
+    // We start at the very beginning of the frame data (Header is 28 bytes)
+    uint32_t absoluteFrameStart = 28 + (frameIdx * channelCount);
+    if (!fseqFile.seek(absoluteFrameStart)) return false;
+
+    // 2. READ THE FIRST 500 CHANNELS
+    uint8_t scanData[500];
+    int bytesRead = fseqFile.read(scanData, 500);
+    if (bytesRead < 500) return false;
+
+    // 3. TRACK MAXIMUM VALUES (To find active channels)
+    static uint8_t globalMax[500];
+    for (int i = 0; i < 500; i++) {
+        if (scanData[i] > globalMax[i]) {
+            globalMax[i] = scanData[i];
+        }
+    }
+
+    // 4. LIVE LED FEEDBACK (1 LED = 1 Physical Channel)
+    // This allows you to see which channels are "dancing" in real-time
+    for (int i = 0; i < 32; i++) {
+        uint8_t val = scanData[i]; 
+        // We show them in white so you can see every flicker
+        leds[i] = CRGB(val, val, val); 
+    }
+    FastLED.show();
+
+    // 5. SERIAL REPORTING (Every 5 seconds / 100 frames)
+    if (frameIdx % 100 == 0) {
+        Serial.printf("\n--- PHYSICAL SCAN REPORT (Frame %d) ---\n", frameIdx);
+        Serial.println("Channels with significant activity (Value > 50):");
+        int foundCount = 0;
+        for (int i = 0; i < 500; i++) {
+            if (globalMax[i] > 50) {
+                Serial.printf("[%03d]: %d | ", i, globalMax[i]);
+                foundCount++;
+                if (foundCount % 6 == 0) Serial.println("");
+            }
+        }
+        if (foundCount == 0) Serial.print("No activity detected in the first 500 channels yet.");
+        Serial.println("\n----------------------------------------------");
+    }
+
+    return (frameIdx + 1) < frameCount;
+}
+*/
+bool playFrame(uint32_t frameIdx) {
+    if (!fseqFile || frameIdx >= frameCount) return false;
+
+    uint32_t targetPos = 28 + (frameIdx * channelCount);
+    if (fseqFile.position() != targetPos) {
+        if (!fseqFile.seek(targetPos)) return false;
+    }
+
+    uint8_t frameData[500]; 
+    if (fseqFile.read(frameData, 500) < 1) return false;
+
+    for (size_t i = 0; i < currentConfig.leds.size(); i++) {
+        uint16_t rawCh = currentConfig.leds[i].channel;
+        if (rawCh == 9999) { leds[i] = CRGB::Black; continue; }
+
+        uint8_t val = (rawCh < 500) ? frameData[rawCh] : 0;
+
+        // --- PRECISION S3XY COLOR LOGIC ---
+        
+        if (i <= 31) { 
+            // ================= FRONT (LED 0-31) =================
+            if (rawCh >= 139 && rawCh <= 144) {
+                leds[i] = CRGB(val, (val * 160) >> 8, 0); // Front Amber
+            } else if (rawCh >= 151 && rawCh <= 160) {
+                leds[i] = CRGB((val * 200) >> 8, (val * 200) >> 8, val); // Front Signature
+            } else {
+                leds[i] = CRGB(val, val, val); // Front Beams (White)
+            }
+        } 
+        else {
+            // ================= REAR (LED 32-63) =================
+            // 1. REAR AMBER: Blinker (139-144 & 339-344)
+            if ((rawCh >= 139 && rawCh <= 144) || (rawCh >= 339 && rawCh <= 344)) {
+                leds[i] = CRGB(val, (val * 160) >> 8, 0); 
+            }
+            // 2. REAR WHITE: Reverse (390-392) & Kennzeichen (184)
+            else if ((rawCh >= 390 && rawCh <= 392) || rawCh == 184) {
+                leds[i] = CRGB(val, val, val); 
+            }
+            // 3. REAR RED: Der Rest (Rücklicht, Bremse, Nebelschluss)
+            else {
+                leds[i] = CRGB(val, 0, 0); 
+            }
+        }
+    }
+
+    FastLED.show();
+    return (frameIdx + 1) < frameCount;
 }
 
-/* void teslaCountdown() {
-  while (true) {
-    timeClient.update();
-    unsigned long currentEpoch = timeClient.getEpochTime();
-    long secondsLeft = showStartEpoch - currentEpoch;
 
-    if (secondsLeft <= 0) {
-      showRunning = true;
-      u8g2.clearBuffer();
-      u8g2.setFont(u8g2_font_logisoso32_tr);
-      u8g2.drawStr(xOffset + 15, yOffset + 44, "GO!");
-      u8g2.sendBuffer();
-      delay(1000);
-      return;
-    }
-
-    int mins = secondsLeft / 60;
-    int secs = secondsLeft % 60;
-
-    char buf[6];
-    u8g2.clearBuffer();
-
-    if (mins > 0) {
-      sprintf(buf, "%02d:%02d", mins, secs);
-      u8g2.setFont(u8g2_font_logisoso24_tr);
-      u8g2.drawStr(xOffset, yOffset + 34, buf);
-    } else {
-      sprintf(buf, "%02d", secs);
-      u8g2.setFont(u8g2_font_logisoso38_tr);
-      u8g2.drawStr(xOffset + 15, yOffset + 44, buf);
-    }
-
-    u8g2.sendBuffer();
+void stopShowAndCleanup() {
+    isBusy = true; 
+    showRunning = false;
+    
+    // 1. Turn off LEDs first (immediate feedback)
+    FastLED.clear(true);
+    FastLED.show();
+    
+    // 2. Small pause to let the CPU settle
     delay(200);
-  }
-} */
+    yield();
+
+    // 3. Close file carefully
+    if (fseqFile) {
+        fseqFile.close();
+        // The most important line for ESP32-C3 stability:
+        fseqFile = File(); 
+    }
+
+    showStartEpoch = 0;
+    currentFrame = 0;
+    isBusy = false;
+    
+    showStatus("READY");
+    Serial.println(F("Clean exit."));
+}
 
 // ------------------- Web App -------------------
 void handleTeslaApp(AsyncWebServerRequest *request) {
-    if (request->method() == HTTP_POST) {
-        bool configChanged = false;
+    // --- 1. SAFETY CHECK ---
+    if (showRunning && request->method() == HTTP_GET) {
+        request->send(200, "text/plain", "Show is active. Please check the OLED display.");
+        return;
+    }
 
-        // 1. Handle Config Selection
+    // --- 2. POST DATA PROCESSING ---
+    if (request->method() == HTTP_POST) {
+        // Hardware Config
         if (request->hasParam("config", true)) {
             currentConfigFile = "/" + request->getParam("config", true)->value();
-            if (loadConfig(currentConfigFile)) {
-                FastLED.clear();
-                // Re-initialize with potentially new config parameters
-                FastLED.addLeds<WS2812B, 10, GRB>(leds, 50); 
-                configChanged = true;
-            }
+            loadConfig(currentConfigFile);
         }
 
-        // 2. Handle Show Selection
+        // Show File
         if (request->hasParam("show", true)) {
             currentShow = "/" + request->getParam("show", true)->value();
             if (fseqFile) fseqFile.close();
             fseqFile = LittleFS.open(currentShow, "r");
-            if (fseqFile) {
-                readFseqHeader();
-            }
+            if (fseqFile) readFseqHeader();
         }
 
-        // 3. Handle Schedule Start
-        if (request->hasParam("start_time", true)) {
-            // 1. Get parameters from the request
-            String timeStr = request->getParam("start_time", true)->value();
-            String selectedConfig = request->hasParam("config", true) ? request->getParam("config", true)->value() : "Default";
-            String selectedShow = request->hasParam("show", true) ? request->getParam("show", true)->value() : "None";
-
-            // 2. Calculate time (your existing logic)
-            int hour = timeStr.substring(0,2).toInt();
-            int minute = timeStr.substring(3,5).toInt();
-            unsigned long currentEpoch = timeClient.getEpochTime();
-            struct tm *ptm = gmtime((time_t*)&currentEpoch);
-            ptm->tm_hour = hour;
-            ptm->tm_min = minute;
-            ptm->tm_sec = 0;
-            showStartEpoch = mktime(ptm);
-
-            if (showStartEpoch > currentEpoch + 600) showStartEpoch = currentEpoch + 600;
-
-            // 3. Build a beautiful response page
-            String response = R"=====(
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <meta http-equiv="refresh" content="5;url=/">
-            <title>myS3XY - Scheduled</title>
-            <style>
-                body { font-family: 'Segoe UI', sans-serif; text-align: center; background: #121212; color: #e0e0e0; padding: 20px; }
-                .card { background: #1e1e1e; border-radius: 12px; padding: 30px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); max-width: 400px; margin: 50px auto; border-top: 5px solid #cc0000; }
-                h1 { color: #cc0000; letter-spacing: 2px; margin-bottom: 5px; }
-                .success-icon { font-size: 50px; color: #4CAF50; margin: 20px 0; }
-                .info { background: #2a2a2a; padding: 15px; border-radius: 8px; text-align: left; margin: 20px 0; }
-                .info p { margin: 5px 0; font-size: 16px; }
-                .footer { font-size: 12px; color: #888; }
-                a { color: #cc0000; text-decoration: none; font-weight: bold; }
-            </style>
-        </head>
-        <body>
-            <h1>myS3XY Tesla Show</h1>
-            <div class="card">
-                <div class="success-icon">✔</div>
-                <h2>Show Scheduled!</h2>
-                
-                <div class="info">
-        )=====";
-
-            response += "<p><strong>⏰ Start Time:</strong> " + timeStr + "</p>";
-            response += "<p><strong>🛠 Config:</strong> " + selectedConfig + "</p>";
-            response += "<p><strong>🎬 Show:</strong> " + selectedShow + "</p>";
-            
-            response += R"=====(
-                </div>
-                
-                <p class="footer">Redirecting to dashboard in 5 seconds...</p>
-                <p><a href="/">[ Back Now ]</a></p>
-            </div>
-        </body>
-        </html>
-        )=====";
-
-            request->send(200, "text/html", response);
+        // --- THE NEW INTERNATIONAL TIME LOGIC ---
+        // Checks if the phone sent an absolute UTC timestamp
+        if (request->hasParam("utc_target", true)) {
+            long target = request->getParam("utc_target", true)->value().toInt();
+            if (target > 0) {
+                showStartEpoch = target;
+                triggerCountdown = true;
+            }
+        } 
+        // Fallback for "NOW" button
+        if (request->hasParam("instant", true)) {
+            showStartEpoch = timeClient.getEpochTime();
             triggerCountdown = true;
-            return;
         }
+
+        request->redirect("/"); 
+        return;
     }
 
-    // --- Build Web Interface (GET) ---
-    
+    // --- 3. UI GENERATION ---
+    String html = ""; 
+    html.reserve(9000);
+
     // Header & CSS
-    String html = R"=====(
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>my S3XY Lightshow</title>
-    <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; margin: 0; background: #121212; color: #e0e0e0; padding: 20px; }
-        .card { background: #1e1e1e; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); max-width: 500px; margin-left: auto; margin-right: auto; }
-        h1 { color: #cc0000; letter-spacing: 2px; }
-        h3 { border-bottom: 1px solid #333; padding-bottom: 10px; color: #f0f0f0; }
-        select, input, button { font-size: 18px; padding: 12px; margin: 10px 0; width: 100%; border-radius: 6px; border: 1px solid #333; background: #2a2a2a; color: white; box-sizing: border-box; }
-        button { background: #cc0000; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 20px; }
-        button:hover { background: #ff0000; }
-        .file-list { text-align: left; list-style: none; padding: 0; }
-        .file-item { display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid #333; font-family: monospace; }
-        .btn-del { color: #ff4444; text-decoration: none; font-weight: bold; padding: 5px 10px; border: 1px solid #ff4444; border-radius: 4px; font-size: 12px; }
-        .btn-del:hover { background: #ff4444; color: white; }
-        .sys-tag { color: #666; font-size: 12px; font-style: italic; }
-        .storage-info { font-size: 12px; color: #888; margin-top: 10px; }
-    </style>
-    <script>
-        // Prüft alle 2 Sekunden, ob die Seite neu geladen werden muss
-        setInterval(function() {
-            var statusText = document.getElementById('status-bar').innerText;
-            // Wenn ein Countdown (⏳) oder eine Show (🔴) aktiv ist, lade neu
-            if (statusText.includes("⏳") || statusText.includes("🔴")) {
-                location.reload();
-            }
-        }, 2000);
-    </script>
-</head>
-<body>
-    <h1>my S3XY Lightshow</h1>
-)=====";
-    // Status Indicator
-    String status = getSystemStatus();
-    String color = "#4CAF50"; // Green
-    if (status.indexOf("🔴") >= 0) color = "#f44336"; // Red (Note: indexOf is safer than startsWith for emojis)
-    if (status.indexOf("⏳") >= 0) color = "#ff9800"; // Orange
-    
-    html += "<div id='status-bar' style='display:inline-block; padding: 5px 15px; border-radius: 20px; background:" + color + "; color:white; font-weight:bold; margin-bottom:20px; font-size:14px;'>";
-    html += status;
-    html += "</div>";
-
     html += R"=====(
-    <div class="card">
-        <h3>Show Settings</h3>
-        <form action="/setshow" method="post">
-            <label>Select Configuration:</label>
-            <select name="config">
-)=====";
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S3XY Controller</title><style>
+:root { --tesla-red: #cc0000; --tesla-green: #2e7d32; --bg-dark: #121212; --card-bg: #1e1e1e; }
+body { font-family: 'Segoe UI', sans-serif; text-align: center; margin: 0; background: var(--bg-dark); color: #e0e0e0; padding: 15px; }
+.card { background: var(--card-bg); border-radius: 12px; padding: 20px; margin-bottom: 20px; max-width: 480px; margin-left: auto; margin-right: auto; border: 1px solid #333; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+h1 { color: var(--tesla-red); letter-spacing: 1px; margin-bottom: 5px; }
+h3 { border-bottom: 1px solid #333; padding-bottom: 10px; margin-top: 0; font-size: 1.1em; color: #bbb; text-transform: uppercase; }
+label { display: block; text-align: left; font-size: 0.85em; color: #888; margin: 10px 0 5px 0; }
+select, input, button { font-size: 16px; padding: 12px; margin: 5px 0; width: 100%; border-radius: 8px; border: 1px solid #333; background: #2a2a2a; color: white; box-sizing: border-box; outline: none; }
+select { appearance: none; background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23FFFFFF%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E"); background-repeat: no-repeat; background-position: right 12px center; background-size: 12px auto; padding-right: 35px; }
+button { background: var(--tesla-red); cursor: pointer; font-weight: bold; border: none; }
+.btn-now { background: var(--tesla-green); width: auto !important; padding: 12px 25px !important; margin-left: 5px; text-transform: uppercase; }
+.file-list { text-align: left; list-style: none; padding: 0; }
+.file-item { padding: 12px; border-bottom: 1px solid #252525; position: relative; }
+.btn-del { color: #ff4444; text-decoration: none; font-size: 11px; border: 1px solid #ff4444; padding: 3px 8px; border-radius: 4px; position: absolute; right: 10px; top: 12px; }
+.status-pill { display: inline-block; padding: 6px 18px; border-radius: 20px; font-weight: bold; margin-bottom: 20px; font-size: 0.9em; }
+</style></head><body><h1>S3XY Lightshow</h1>)=====";
 
-    // --- Populate Config Dropdown ---
+    // --- UI: Status Pill ---
+    html += "<div id='status-pill' class='status-pill' style='background:#444;'>LOADING STATUS...</div>";
+
+    if (showRunning || showStartEpoch > 0) {
+        html += "<div class='card' style='border-top: 4px solid #f44336;'><h3>Actions</h3><a href='/cancel' style='display:block; background:#d32f2f; color:white; padding:15px; text-decoration:none; border-radius:8px; font-weight:bold;'>STOP / CANCEL SHOW</a></div>";
+    }
+
+    // --- UI: Scheduler ---
+    html += R"=====(
+<div class="card"><h3>Schedule Show</h3><form action="/setshow" method="post">
+<input type="hidden" id="utc_target" name="utc_target" value="0">
+<label>1. Select Sequence File:</label><select name="show">)=====";
+
     File root = LittleFS.open("/");
-    if (root && root.isDirectory()) {
-        File file = root.openNextFile();
-        while (file) {
-            String n = file.name();
-            if (n.startsWith("/")) n = n.substring(1);
-            if (n.startsWith("config_") && n.endsWith(".json")) {
-                String selected = (n == "config_full.json") ? " selected" : "";
-                html += "<option value='" + n + "'" + selected + ">" + n + "</option>";
-            }
-            file.close();
-            file = root.openNextFile();
+    File file = root.openNextFile();
+    while (file) {
+        String n = file.name(); if (n.startsWith("/")) n = n.substring(1);
+        if (n.endsWith(".fseq")) {
+            String selected = (("/"+n) == currentShow) ? " selected" : "";
+            html += "<option value='" + n + "'" + selected + ">" + n + "</option>";
         }
-        root.close();
+        file.close(); file = root.openNextFile();
     }
 
-    html += R"=====(
-            </select>
+    html += "</select><label>2. Start Time & Launch:</label><div style='display: flex; gap: 10px;'>";
+    html += "<select name='start_time' style='flex-grow: 1;'>";
+    
+    time_t now = timeClient.getEpochTime();
+    for (int i = 1; i <= 10; i++) {
+        time_t optTime = now + (i * 60);
+        struct tm * t = localtime(&optTime);
+        char tStr[10];
+        sprintf(tStr, "%02d:%02d", t->tm_hour, t->tm_min);
+        html += "<option value='" + String(tStr) + "'>" + String(tStr) + "</option>";
+    }
+    html += "</select><button type='submit' name='instant' value='true' class='btn-now'>NOW</button></div>";
+    
+    // International Start Button
+    html += "<button type='submit' onclick='calculateUTC()' style='background:#444; margin-top:15px; margin-bottom:15px;'>START COUNTDOWN</button>";
 
-            <label>Select Show File (.fseq):</label>
-            <select name="show">
-)=====";
-
-    // --- Populate Show Dropdown ---
+    // Advanced Hardware Config
+    html += "<hr style='border:0; border-top:1px solid #333; margin:10px 0;'><label>Advanced: Hardware Config</label><select name='config' style='font-size: 14px;'>";
     root = LittleFS.open("/");
-    if (root && root.isDirectory()) {
-        File file = root.openNextFile();
-        while (file) {
-            String n = file.name();
-            if (n.startsWith("/")) n = n.substring(1);
-            if (n.endsWith(".fseq")) {
-                String selected = (n == "show.fseq") ? " selected" : "";
-                html += "<option value='" + n + "'" + selected + ">" + n + "</option>";
-            }
-            file.close();
-            file = root.openNextFile();
+    file = root.openNextFile();
+    while (file) {
+        String n = file.name(); if (n.startsWith("/")) n = n.substring(1);
+        if (n.startsWith("config_") && n.endsWith(".json")) {
+            String selected = (("/"+n) == currentConfigFile) ? " selected" : "";
+            html += "<option value='" + n + "'" + selected + ">" + n + "</option>";
         }
-        root.close();
+        file.close(); file = root.openNextFile();
     }
+    html += "</select></form></div>";
 
+    // --- UI: File Explorer ---
+    html += "<div class='card'><h3>Storage Explorer</h3><ul class='file-list'>";
+    root = LittleFS.open("/"); 
+    file = root.openNextFile();
+    while (file) {
+        String n = file.name(); if (n.startsWith("/")) n = n.substring(1);
+        html += "<li class='file-item'><strong>" + n + "</strong>";
+        html += "<a href='/delete?file=" + n + "' class='btn-del' onclick='return confirm(\"Delete permanently?\")'>DELETE</a></li>";
+        file.close(); file = root.openNextFile();
+    }
+    root.close(); 
+
+    // --- UI: Upload ---
     html += R"=====(
-            </select>
-
-            <label>Start Time:</label>
-            <input type="time" name="start_time" required>
-
-            <button type="submit">START COUNTDOWN</button>
+        </ul><hr style="border:0; border-top:1px solid #333; margin:20px 0;">
+        <label>Upload new Config (.json) or Show (.fseq):</label>
+        <form method="POST" action="/upload" enctype="multipart/form-data" style="text-align:left;">
+            <input type="file" name="upload" accept=".json,.fseq" style="font-size:12px; border:1px dashed #555; background:transparent; width:100%;">
+            <button type="submit" style="background:#444; margin-top:10px; font-size:14px;">UPLOAD FILE</button>
         </form>
+        <p><a href="/update" style="color:#388e3c; font-size:11px; text-decoration:none;">&bull; Firmware OTA Portal</a></p>
     </div>
+)====="; 
 
-    <div class="card">
-        <h3>File Explorer</h3>
-        <p class="storage-info">)=====";
-    
-    html += getStorageInfo(); // Your helper function
-    
-    html += "</p><ul class='file-list'>";
-
-    // --- Build File Explorer List with Delete Buttons ---
-    root = LittleFS.open("/");
-    if (root && root.isDirectory()) {
-        File file = root.openNextFile();
-        while (file) {
-            String n = file.name();
-            if (n.startsWith("/")) n = n.substring(1);
-            
-            html += "<li class='file-item'><span>" + n + "</span>";
-            
-            if (n != "config_full.json" && n != "show.fseq") {
-                html += "<a href='/delete?file=" + n + "' class='btn-del' onclick='return confirm(\"Delete this file?\")'>DELETE</a>";
-            } else {
-                html += "<span class='sys-tag'>[System File]</span>";
-            }
-            html += "</li>";
-
-            File nextFile = root.openNextFile();
-            file.close();
-            file = nextFile;
-        }
-        root.close();
+    // --- JAVASCRIPT: International Logic ---
+    html += "<script>";
+    html += "var targetEpoch = " + String(showStartEpoch) + ";";
+    html += "var isRunning = " + String(showRunning ? "true" : "false") + ";";
+    html += "var configName = '" + currentConfigFile.substring(currentConfigFile.lastIndexOf('/') + 1) + "';";
+    html += R"=====(
+    function calculateUTC() {
+        var timeVal = document.getElementsByName("start_time")[0].value;
+        var h = parseInt(timeVal.split(":")[0]);
+        var m = parseInt(timeVal.split(":")[1]);
+        var target = new Date();
+        target.setHours(h, m, 0, 0);
+        if (target.getTime() < Date.now()) target.setDate(target.getDate() + 1);
+        document.getElementById('utc_target').value = Math.floor(target.getTime() / 1000);
     }
 
-    html += R"=====(
-        </ul>
-        <hr style="border:0; border-top:1px solid #333; margin:20px 0;">
-        <p><a href="/update" style="color:#00ff00; text-decoration:none;">&rarr; Upload New Files (OTA)</a></p>
-    </div>
-</body>
-</html>
-)=====";
+    function updateCountdown() {
+        var now = Math.floor(Date.now() / 1000);
+        var pill = document.getElementById('status-pill');
+        if (isRunning) {
+            pill.innerHTML = "🔴 SHOW ACTIVE (" + configName + ")";
+            pill.style.background = "#d32f2f"; return;
+        }
+        if (targetEpoch > 0) {
+            var diff = targetEpoch - now;
+            if (diff > 0) {
+                pill.innerHTML = "⏳ START IN " + diff + " SECONDS";
+                pill.style.background = "#f57c00";
+            } else {
+                pill.innerHTML = "🚀 SHOW STARTED...";
+                pill.style.background = "#388e3c";
+                setTimeout(function(){ location.reload(); }, 2000);
+            }
+        } else {
+            pill.innerHTML = "🟢 READY (" + configName + ")";
+            pill.style.background = "#388e3c";
+        }
+    }
+    setInterval(updateCountdown, 1000);
+    updateCountdown();
+    </script></body></html>)=====";
 
     request->send(200, "text/html", html);
 }
@@ -495,12 +640,6 @@ void handleDelete(AsyncWebServerRequest *request) {
     if (request->hasParam("file")) {
         String filename = "/" + request->getParam("file")->value();
         
-        // Securtiy check: protect default files
-        if (filename == "/config_full.json" || filename == "/show.fseq") {
-            request->send(403, "text/plain", "Error: You can't delete default files!");
-            return;
-        }
-
         if (LittleFS.exists(filename)) {
             LittleFS.remove(filename);
             request->send(200, "text/html", "File deleted. <a href='/'>Back</a>");
@@ -511,6 +650,8 @@ void handleDelete(AsyncWebServerRequest *request) {
     }
 }
 
+void handleUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final);
+
 // ------------------- setup & loop -------------------
 void setup() {
   Serial.begin(115200);
@@ -518,10 +659,10 @@ void setup() {
   Serial.println("=== myS3XY Lightshow starting ===");
 
   pinMode(STATUS_LED, OUTPUT);
-  digitalWrite(STATUS_LED, HIGH); // blue LED off
+  digitalWrite(STATUS_LED, HIGH); // blue LED off = WiFi not connected
 
-  FastLED.addLeds<WS2812B, 10, GRB>(leds, 50);  // Fixed pin 10, buffer 50 LEDs
-  FastLED.setBrightness(128);
+  FastLED.addLeds<WS2812B, 10, GRB>(leds, 64);  // Fixed pin 10, buffer 100 LEDs
+  applyPowerSettings();
 
   u8g2.begin();
   u8g2.setContrast(255);
@@ -532,7 +673,7 @@ void setup() {
   WiFi.begin(ssid, password);
   showStatus("Connecting WiFi...");
   while (WiFi.status() != WL_CONNECTED) delay(500);
-  digitalWrite(STATUS_LED, LOW); // blue LED on
+  digitalWrite(STATUS_LED, LOW); // blue LED on = WiFi connected
   showStatus("WiFi connected");
   showIP();
 
@@ -556,13 +697,13 @@ void setup() {
     delay(2000);
   }
 
-  if (!LittleFS.begin()) {
-    showStatus("Filesys error");
-    while (1);
+  if (!LittleFS.begin(true)) { 
+    Serial.println("LittleFS Error!");
+    showStatus("FS Format..."); 
   }
   Serial.println("LittleFS mounted");
 
-  // Alle Dateien auflisten
+  // List all files
   File root = LittleFS.open("/");
   File file = root.openNextFile();
   while (file) {
@@ -573,18 +714,103 @@ void setup() {
 
   loadConfig(currentConfigFile);
 
+  /*
   if (!LittleFS.exists("/show.fseq")) {
     showStatus("No show.fseq");
     while (1);
   }
-  fseqFile = LittleFS.open("/show.fseq", "r");
-  readFseqHeader();
+  */
 
   ElegantOTA.begin(&server);
+  server.on("/", HTTP_ANY, handleTeslaApp);
   server.on("/", HTTP_GET, handleTeslaApp);
   server.on("/setshow", HTTP_GET, handleTeslaApp);
   server.on("/setshow", HTTP_POST, handleTeslaApp);
-  server.on("/delete", HTTP_GET, handleDelete);
+  server.on("/delete", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String filename = "";
+    if (request->hasParam("file")) {
+        filename = request->getParam("file")->value();
+        if (!filename.startsWith("/")) filename = "/" + filename;
+        LittleFS.remove(filename);
+        Serial.printf("File deleted: %s\n", filename.c_str());
+    }
+
+    // Build Response in the same style as Upload
+    String statusColor = "#cc0000"; // Tesla Red for Delete
+    String html = "<html><head>";
+    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<style>body{font-family:Arial;text-align:center;background:#121212;color:white;padding:20px;}";
+    html += ".box{background:#1e1e1e;padding:30px;border-radius:12px;border-top:5px solid " + statusColor + ";display:inline-block;width:90%;max-width:400px;margin-top:50px;}";
+    html += "a{display:block;background:#333;color:white;padding:15px;text-decoration:none;border-radius:6px;margin-top:20px;font-weight:bold;transition:0.3s;}";
+    html += "a:hover{background:#444;}</style></head><body><div class='box'>";
+
+    html += "<h2>File Deleted</h2>";
+    html += "<p style='color:#888;'>The following file has been removed:</p>";
+    html += "<p style='font-family:monospace;background:#252525;padding:10px;border-radius:4px;'>" + filename + "</p>";
+
+    html += "<a href='/'>[ Back to Dashboard ]</a>";
+    html += "</div></body></html>";
+
+    request->send(200, "text/html", html);
+    });
+  server.on("/upload", HTTP_POST, [](AsyncWebServerRequest *request) {
+      bool isValid = true;
+      String message = "Upload successful!";
+      
+      if (lastUploadedFilename.endsWith(".json")) {
+          File file = LittleFS.open("/" + lastUploadedFilename, "r");
+          if (file) {
+              JsonDocument doc;
+              DeserializationError error = deserializeJson(doc, file);
+              file.close();
+              if (error) {
+                  isValid = false;
+                  message = "JSON ERROR: " + String(error.c_str());
+                  LittleFS.remove("/" + lastUploadedFilename);
+              }
+          }
+      }
+
+      String statusColor = isValid ? "#4CAF50" : "#f44336";
+      String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'></head>";
+      html += "<body style='font-family:Arial;text-align:center;background:#121212;color:white;padding:20px;'>";
+      html += "<div style='background:#1e1e1e;padding:30px;border-radius:12px;border-top:5px solid " + statusColor + ";display:inline-block;width:90%;max-width:400px;'>";
+      html += "<h2>" + message + "</h2>";
+      html += "<p>File: " + lastUploadedFilename + "</p>";
+      html += "<br><a href='/' style='display:block;background:#cc0000;color:white;padding:15px;text-decoration:none;border-radius:6px;font-weight:bold;'>[ Back to Dashboard ]</a>";
+      html += "</div></body></html>";
+      
+      request->send(200, "text/html", html);
+  }, [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+      if (!index) {
+          if (filename.startsWith("/")) lastUploadedFilename = filename.substring(1);
+          else lastUploadedFilename = filename;
+          request->_tempFile = LittleFS.open("/" + lastUploadedFilename, "w");
+      }
+      if (len && request->_tempFile) {
+          request->_tempFile.write(data, len);
+          // WICHTIG: Nach jedem Block kurz Zeit für das System lassen
+          yield(); 
+      }
+      if (final && request->_tempFile) {
+          request->_tempFile.close();
+          yield();
+      }
+  });
+
+  server.on("/cancel", HTTP_GET, [](AsyncWebServerRequest *request) {
+    showRunning = false;
+    showStartEpoch = 0;
+    triggerCountdown = false;
+    currentFrame = 0;
+    FastLED.clear();
+    FastLED.show();
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_6x10_tr);
+    u8g2.drawStr(xOffset, yOffset + 20, "Show Cancelled");
+    u8g2.sendBuffer();
+    request->redirect("/"); // Back to the Dashboard
+  });
 
   server.begin();
   Serial.println("Web server & OTA ready");
@@ -601,9 +827,9 @@ void loop() {
     long secondsLeft = showStartEpoch - currentEpoch;
 
     if (secondsLeft > 0) {
-      // Display Countdown on OLED
+      // --- DISPLAY COUNTDOWN ---
       static unsigned long lastUpdate = 0;
-      if (millis() - lastUpdate > 500) { // Update OLED every 500ms
+      if (millis() - lastUpdate > 500) { 
         int mins = secondsLeft / 60;
         int secs = secondsLeft % 60;
         char buf[10];
@@ -621,55 +847,78 @@ void loop() {
         lastUpdate = millis();
       }
     } else {
-      // Countdown reached zero -> Start Show
-      triggerCountdown = false;
-      showRunning = true;
-      currentFrame = 0; 
-      
-      // IMPORTANT: Sync show start to current network time
-      showStartEpoch = currentEpoch; 
-      
-      u8g2.clearBuffer();
-      u8g2.setFont(u8g2_font_logisoso32_tr);
-      u8g2.drawStr(xOffset + 10, yOffset + 48, "GO!");
-      u8g2.sendBuffer();
+    // --- START SHOW NOW ---
+    isBusy = true; // Block webserver for a moment during file opening
+    if (fseqFile) { fseqFile.close(); fseqFile = File(); } 
+
+    fseqFile = LittleFS.open(currentShow, "r");
+    if (fseqFile && readFseqHeader()) {
+        showRunning = true;
+        currentFrame = 0; 
+        
+        // SYNC: Start the precise millisecond timer
+        showStartTimeMillis = millis(); 
+        showStartEpoch = currentEpoch; // Keep this for the Web UI status
+        
+        // STATIC OLED: Update once, then leave it alone during playback
+        u8g2.clearBuffer();
+        u8g2.setFont(u8g2_font_logisoso24_tf); // Slightly smaller to fit more text if needed
+        u8g2.drawStr(xOffset, yOffset + 45, "ACTIVE");
+        u8g2.sendBuffer();
+        
+        Serial.println(F("Show started: Precise sync active, OLED silenced."));
+    } else {
+        stopShowAndCleanup();
+    }
+      isBusy = false;
     }
   }
+
   // CASE 2: Show is active
-  if (showRunning) {
-    // Calculate how many milliseconds have passed since the "GO!"
-    unsigned long millisSinceStart = (timeClient.getEpochTime() - showStartEpoch) * 1000;
-    
-    // Safety check: ensure stepTimeMs is not zero
-    if (stepTimeMs == 0) stepTimeMs = 50; 
 
-    // Determine the target frame based on elapsed time
-    uint32_t targetFrame = millisSinceStart / stepTimeMs;
+    if (showRunning) {
+        // --- PERFORMANCE MONITOR VARIABLES ---
+        static uint32_t totalProcessTime = 0;
+        static uint16_t sampleCounter = 0;
+        
+        // 1. HIGH PRECISION TIMING
+        unsigned long msElapsed = millis() - showStartTimeMillis;
+        uint32_t targetFrame = msElapsed / stepTimeMs;
 
-    if (targetFrame >= currentFrame) {
-        // Play the current frame
-        if (!playFrame(currentFrame)) {
-            // If playFrame returns false, the show is over (EOF)
-            showRunning = false;
-            showStartEpoch = 0;
-            triggerCountdown = false;
-            currentFrame = 0;
-            showStatus("SHOW DONE");
-            FastLED.clear(true);
-        } else {
-            // Move to the next frame
-            currentFrame++;
+        // 2. PLAYBACK LOGIC
+        if (targetFrame >= currentFrame) {
+            // Check for lag
+            if (targetFrame > currentFrame + 2) {
+                currentFrame = targetFrame;
+            }
+
+            // --- START MEASURING PLAYFRAME ---
+            unsigned long startMicros = micros();
             
-            // Optional: Update OLED every 10 frames to save CPU
-            if (currentFrame % 10 == 0) {
-                u8g2.clearBuffer();
-                u8g2.setFont(u8g2_font_6x10_tr);
-                char buf[20];
-                sprintf(buf, "%lu/%lu", currentFrame, frameCount);
-                u8g2.drawStr(xOffset, yOffset + 25, buf);
-                u8g2.sendBuffer();
+            if (!playFrame(currentFrame)) {
+                stopShowAndCleanup();
+            } else {
+                currentFrame++;
+            }
+
+            // --- CALCULATE DURATION ---
+            uint32_t duration = (micros() - startMicros) / 1000; // Time in milliseconds
+            totalProcessTime += duration;
+            sampleCounter++;
+
+            // Report average every 100 frames (approx. 5 seconds)
+            if (sampleCounter >= 100) {
+                uint32_t avg = totalProcessTime / 100;
+                Serial.printf(">>> PERFORMANCE: Avg Frame Time %d ms | Target: %d ms\n", avg, stepTimeMs);
+                
+                // Warning if we are too slow
+                if (avg >= stepTimeMs) {
+                    Serial.println("!!! WARNING: Storage or CPU too slow for this show!");
+                }
+                
+                totalProcessTime = 0;
+                sampleCounter = 0;
             }
         }
     }
-  }
 }
