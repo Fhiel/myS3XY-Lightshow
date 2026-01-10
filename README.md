@@ -1,5 +1,9 @@
 # 🚗 myS3XY-Lightshow
-
+![ESP32-C3](https://img.shields.io/badge/Hardware-ESP32--C3-blue?style=for-the-badge&logo=espressif)
+![RP2040](https://img.shields.io/badge/Hardware-RP2040-informational?style=for-the-badge&logo=raspberrypi)
+![LED](https://img.shields.io/badge/LED-WS2812B%20%2F%20NeoPixel-green?style=for-the-badge&logo=lightbulb)
+![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
+[![GitHub Stars](https://img.shields.io/github/stars/Fhiel/myS3XY-Lightshow?style=for-the-badge&color=gold&logo=github)](https://github.com/Fhiel/myS3XY-Lightshow/stargazers)
 An open-source companion for Tesla Light Shows – bring the spectacular synchronized light show experience to **any vehicle**, RC car, or custom LED setup.
 
 
