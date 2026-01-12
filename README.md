@@ -27,18 +27,22 @@ This project turns an inexpensive ESP32-C3 board with a small OLED display into 
 
 ## 📂 Configuration Guide (Custom LED Layouts)
 
-The system uses **Absolute Mapping (Offset 0)**. This means you map your physical LEDs directly to the global Tesla channel map found in the FSEQ file.
+The system uses **Absolute Mapping**. This means you map your physical LEDs directly to the global Tesla channel map found in the FSEQ file.
+**Core Concepts:**
+- **No Comments:** JSON files must not contain any comments (// or /* */). Use the structure below exactly.
+- **50:50 Split:** The controller automatically treats the first half of your defined LEDs as FRONT (White/Blue/Amber logic) and the second half as REAR (Red/Amber/White logic).
+- **Channel 9999:** Use this for "dead" LEDs or spacing on your strip.
 
 ### Common Tesla Channel Map (Absolute)
-| Function | Physical Channel | Expected Color Logic |
-| :--- | :--- | :--- |
-| **Front Indicators** | 139 (L), 142 (R) | Amber |
-| **Signature / DRL** | 151 - 160 | Cold White |
-| **Main Beams / Fog** | 184 - 192 | Bright White |
-| **Tail / Brake Lights** | 164 - 183 | Red |
-| **Rear Indicators** | 339 (L), 342 (R) | Amber |
-| **Reverse Lights** | 390 - 392 | White |
-
+| Section |Function | FSEQ Channel | Expected Color |
+| :--- | :--- | :---| :--- |
+| **FRONT** | Indicators Left / Right | 139 (L), 142 (R) | Amber |
+| **FRONT** | **Matrix Effects (Animations) ** | 151 - 160 | Blue/White |
+| **FRONT**| **Main Beams / Fog / Sig ** | 184 - 192 | Bright White |
+| **REAR** | **Tail / Brake Lights** | 164 - 183 | Red |
+| **REAR** | **Rear Indicators** | 339 (L), 342 (R) | Amber |
+| **REAR** | **Reverse Lights** | 390 - 391 | White |
+| **REAR** | **High Brake (Center)** | 392 | Red |
 
 
 ### Example `config.json`
@@ -59,17 +63,21 @@ Note1: Use 9999 for "dead" LEDs or spacing on your strip.
 Note2: The Data Pin is fixed to GPIO 2 for stability. Ensure your LED strip is connected to this pin.
 
 📱 Web Interface Manual
-Schedule Show: Select your .fseq file and a start time. The "START COUNTDOWN" button sends all data to the ESP32. The system uses Client-Side Time Synchronization to ensure perfect alignment between your smartphone and the controller, regardless of your local timezone.
+- **Schedule Show: Select your .fseq file and a start time. The "START COUNTDOWN" button sends all data to the ESP32. The system uses Client-Side Time Synchronization to ensure perfect alignment between your smartphone and the controller, regardless of your local timezone.
+- **NOW Button:** Immediate launch for testing.
+- **Advanced Config:** Switch between hardware layouts (e.g., "Front-only" to "Full-64-LEDs") on the fly.
+- **Storage Explorer:** - Upload: Drag & drop new .fseq or .json files via your browser.
+- **Delete:** Manage your storage space wirelessly.
+- **OTA Portal:** Dedicated link for wireless firmware updates.
 
-NOW Button: Immediate launch for testing.
+---
 
-Advanced Config: Switch between hardware layouts (e.g., "Front-only" to "Full-64-LEDs") on the fly.
-
-Storage Explorer: - Upload: Drag & drop new .fseq or .json files via your browser.
-
-Delete: Manage your storage space wirelessly.
-
-OTA Portal: Dedicated link for wireless firmware updates.
+## 🔍 Using the Channel Analyzer
+If you are using a custom or modified FSEQ file and don't know the channel mapping, enable Channel Analyzer Mode in the Web UI.
+1. **Enable Scan:** Check the "Enable Channel Analyzer" box before starting a show.
+2. **Live Feedback:** Your first 32 LEDs will act as a "VU-Meter," glowing brighter as data passes through channels 0–31.
+3. **Serial Report:** Connect your ESP32 to a PC and open the Serial Monitor (115200 baud). The controller will print a report every 100 frames showing every channel that has registered a brightness level above 50.
+4. **Identification:** Watch the car (or xLights) and the Serial Monitor simultaneously. If the left blinker flashes in the video, look for the channel number in the monitor that spikes at the same moment.
 
 ---
 
@@ -85,18 +93,19 @@ Official shows (like the Xmas 2025 show) are often >1.4 MB. To save memory and e
 Since light shows usually happen outdoors, the controller is pre-configured to connect to a mobile hotspot. This allows the ESP32 to fetch the precise NTP time for synchronization with real Teslas.
 
 **Pre-configured Credentials:**
-* **SSID:** `LIGHTSHOW`
-* **Password:** `mys3xyls`
+- **SSID:** `LIGHTSHOW`
+- **Password:** `mys3xyls`
+- **Hostname:** 'mys3xy.local'
 
 **How to find the Web App:**
-1. **Check the OLED Display:** Once connected, the ESP32 will show its assigned **IP Address** (e.g., `192.168.178.42`) directly on the screen.
-2. **Open Browser:** Type this IP address into your mobile browser's address bar.
+1. **Check the OLED Display:** Once connected, the ESP32 will show its assigned **IP Address** (e.g., `192.168.178.42`) and the hostname 'mys3xy.local' directly on the screen.
+2. **Open Browser:** Type this IP address into your mobile browser's address bar or try 'mys3xy.local' if your device supports this.
 
 **Pro-Tip for Android Users:**
 Android doesn't support local hostnames (mDNS) well. If you miss the IP on the display:
-* Go to your phone's **Mobile Hotspot** settings.
-* Check **Connected Devices** for an entry like `esp32c3-xxxxxx`.
-* Tap the **Info (i)** icon to see the IP.
+1. Go to your phone's **Mobile Hotspot** settings.
+2. Check **Connected Devices** for an entry like `esp32c3-xxxxxx`.
+3. Tap the **Info (i)** icon to see the IP.
 
 #### 3. Launching Your First Show
 1. **Inital Upload:** 
