@@ -6,8 +6,6 @@
 
 An open-source companion for Tesla Light Shows – bring the spectacular synchronized light show experience to **any vehicle**, RC car, or custom LED setup.
 
-
-
 This project turns an inexpensive ESP32-C3 board with a small OLED display into a fully featured light show controller that:
 - **NTP-Synced:** Perfectly synchronizes with real Teslas using Network Time Protocol.
 - **Universal FSEQ:** Plays official Tesla multi-car FSEQ files (V1 Uncompressed).
@@ -47,7 +45,6 @@ The system uses **Absolute Mapping (Offset 0)**. This means you map your physica
 ```json
 {
   "name": "Tesla_64_Symmetric",
-  "data_pin": 10,
   "max_brightness": 128,
   "max_milliamps": 2500,
   "channel_offset": 0,
@@ -58,10 +55,11 @@ The system uses **Absolute Mapping (Offset 0)**. This means you map your physica
   ]
 }
 ```
-Note: Use 9999 for "dead" LEDs or spacing on your strip.
+Note1: Use 9999 for "dead" LEDs or spacing on your strip. 
+Note2: The Data Pin is fixed to GPIO 2 for stability. Ensure your LED strip is connected to this pin.
 
 📱 Web Interface Manual
-Schedule Show: Select your .fseq file and a start time. The "START COUNTDOWN" button uses your phone's clock to sync the ESP32 globally.
+Schedule Show: Select your .fseq file and a start time. The "START COUNTDOWN" button sends all data to the ESP32. The system uses Client-Side Time Synchronization to ensure perfect alignment between your smartphone and the controller, regardless of your local timezone.
 
 NOW Button: Immediate launch for testing.
 
@@ -94,8 +92,6 @@ Since light shows usually happen outdoors, the controller is pre-configured to c
 1. **Check the OLED Display:** Once connected, the ESP32 will show its assigned **IP Address** (e.g., `192.168.178.42`) directly on the screen.
 2. **Open Browser:** Type this IP address into your mobile browser's address bar.
 
-
-
 **Pro-Tip for Android Users:**
 Android doesn't support local hostnames (mDNS) well. If you miss the IP on the display:
 * Go to your phone's **Mobile Hotspot** settings.
@@ -103,10 +99,16 @@ Android doesn't support local hostnames (mDNS) well. If you miss the IP on the d
 * Tap the **Info (i)** icon to see the IP.
 
 #### 3. Launching Your First Show
-1. **Upload:** Use the **Storage Explorer** at the bottom of the Web App to upload your optimized `.fseq` file and your `.json` hardware config.
-2. **Select & Configure:** Choose your show file and the correct hardware config from the dropdown menus.
-3. **Trigger:** - Tap **NOW** for an immediate start.
-   - Or select a time and tap **START COUNTDOWN** to sync with other cars. The OLED will show the official Tesla countdown (MM:SS → Large Seconds → "GO!").
+1. **Inital Upload:** 
+  * Scroll down to the Storage Explorer at the bottom of the Web App.
+  * Upload your optimized .fseq file.
+  * Upload your .json hardware mapping file (see Hardware Mapping section for examples).
+2. **Select & Configure:**
+  * Choose your uploaded show file and the correct hardware config from the dropdown menus.
+  * The status pill will update to "READY (YourConfig.json)".
+3. **Trigger the Magic:** 
+  * **NOW:** Tap for an immediate start.
+  * **START COUNTDOWN:** Select a time (e.g., 2 minutes ahead) and tap to sync with other cars. The OLED will show the official Tesla style countdown sequence (MM:SS → Large Seconds → "GO!").
 
 ---
 
