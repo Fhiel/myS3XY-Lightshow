@@ -6,8 +6,8 @@
 
 An open-source companion for Tesla Light Shows – bring the spectacular synchronized light show experience to **any vehicle**, RC car, or custom LED setup.
 ---
-<img width="190" height="321" alt="image" src="https://github.com/user-attachments/assets/d5790efa-b21e-44a6-aad9-a65180e83c8a" /> <img width="350" height="300" alt="image" src="https://github.com/user-attachments/assets/85e6a9ff-aa47-4c61-8cdd-3b0d877cd703" />
-<img width="300" height="250" alt="image" src="https://github.com/user-attachments/assets/87c8ea1b-9e7f-4b0c-9a6f-ac13884cd955" />
+<img width="190" height="321" alt="image" src="https://github.com/user-attachments/assets/d5790efa-b21e-44a6-aad9-a65180e83c8a" /> <img width="175" height="150" alt="image" src="https://github.com/user-attachments/assets/85e6a9ff-aa47-4c61-8cdd-3b0d877cd703" />
+<img width="150" height="125" alt="image" src="https://github.com/user-attachments/assets/87c8ea1b-9e7f-4b0c-9a6f-ac13884cd955" />
 
 
 
