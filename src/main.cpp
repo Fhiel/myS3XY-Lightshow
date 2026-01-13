@@ -27,7 +27,7 @@
 #include <ArduinoJson.h>
 
 // --- Project definitions ---
-#define PROJECT_VERSION "1.0.0"
+#define PROJECT_VERSION "1.0.1"
 #define PROJECT_NAME "myS3XY-Lightshow"
 
 // --- Network Configuration ---
@@ -63,7 +63,7 @@ uint32_t realChannelsInFile = 0;
 uint32_t channelCount    = 0;
 uint32_t frameCount      = 0;
 uint16_t fseqDataOffset = 0;   // Default to 32, but will be updated by header read
-uint8_t globalMax[500];        // Peak value storage for Channel Analyzer
+uint8_t globalMax[512];        // Peak value storage for Channel Analyzer
 uint8_t frameData[1024];
 
 // --- OLED Display Setup ---
@@ -653,7 +653,7 @@ button { background: var(--tesla-red); cursor: pointer; font-weight: bold; borde
     html += "<input type='checkbox' id='scan_mode' name='scan_mode' value='true'" + String(scanActive ? " checked" : "") + " style='width:auto; margin-right:10px; vertical-align:middle;'>";
     html += "<label for='scan_mode' style='display:inline; color:#888;'>Enable Channel Analyzer</label></div>";
 
-    html += "<button type='button' onclick='calculateUTCAndSubmit()' style='background:#444; margin-top:10px;'>START COUNTDOWN</button>";
+    html += "<button type='button' onclick='calculateUTCAndSync()' style='background:#444; margin-top:10px;'>START COUNTDOWN</button>";
     html += "</form></div>";
 
     // --- STORAGE EXPLORER CARD ---
@@ -698,15 +698,44 @@ button { background: var(--tesla-red); cursor: pointer; font-weight: bold; borde
     html += "var configName = '" + cleanName + "';";
     
     html += R"=====(
-    function calculateUTCAndSubmit() {
-        var timeVal = document.getElementsByName("start_time")[0].value;
-        var parts = timeVal.split(":");
-        var target = new Date(); 
+    function calculateUTCAndSync() {
+        const timeVal = document.getElementsByName("start_time")[0].value;
+        const showFile = document.getElementsByName("show")[0].value;
+        const configFile = document.getElementsByName("config")[0].value;
+        const scanMode = document.getElementById('scan_mode').checked;
+
+        const parts = timeVal.split(":");
+        let target = new Date(); 
         target.setHours(parseInt(parts[0]), parseInt(parts[1]), 0, 0);
-        if (target.getTime() < Date.now()) { target.setDate(target.getDate() + 1); }
-        var epoch = Math.floor(target.getTime() / 1000);
-        document.getElementById('utc_target').value = epoch;
-        document.forms[0].submit();
+        
+        // If time is in the past, assume it's for tomorrow
+        if (target.getTime() < Date.now()) { 
+            target.setDate(target.getDate() + 1); 
+        }
+
+        const targetEpoch = Math.floor(target.getTime() / 1000);
+        const browserNow = Math.floor(Date.now() / 1000);
+
+        // 1. First, send the selection (File/Config/Scan) via the normal POST
+        // We can use a FormData object to simulate the form submit in the background
+        const formData = new FormData();
+        formData.append('show', showFile);
+        formData.append('config', configFile);
+        if(scanMode) formData.append('scan_mode', 'true');
+
+        fetch('/setshow', { method: 'POST', body: formData })
+        .then(() => {
+            // 2. Immediately after, sync time and set the target
+            return fetch(`/start?target=${targetEpoch}&now=${browserNow}`);
+        })
+        .then(response => {
+            if (response.ok) {
+                // Success: Reload UI to show the "WAITING" status
+                location.reload();
+            } else {
+                alert("Sync Failed. Please try again.");
+            }
+        });
     }
 
     function updateCountdown() {
@@ -992,6 +1021,33 @@ void setup() {
     request->redirect("/"); // Back to the Dashboard
   });
 
+  // --- HTTP GET: Countdown & Time Sync Handler ---
+  // This endpoint synchronizes the ESP32 internal clock with the browser's time
+  // and sets the target epoch for the show start.
+  server.on("/start", HTTP_GET, [](AsyncWebServerRequest *request) {
+      if (request->hasParam("target") && request->hasParam("now")) {
+          // 1. Extract timestamps from URL parameters
+          uint32_t targetTime = request->getParam("target")->value().toInt();
+          uint32_t browserNow = request->getParam("now")->value().toInt();
+          
+          // 2. Sync ESP32 system time with browser time (bypass NTP lag)
+          struct timeval tv;
+          tv.tv_sec = browserNow;
+          tv.tv_usec = 0;
+          settimeofday(&tv, NULL); 
+          
+          // 3. Set global variables to trigger the countdown in loop()
+          showStartEpoch = targetTime;
+          triggerCountdown = true;
+          showRunning = false; // Wait for countdown to finish
+          
+          Serial.printf("Time Sync: System=%u, StartAt=%u\n", browserNow, targetTime);
+          request->send(200, "text/plain", "Sync Success");
+      } else {
+          request->send(400, "text/plain", "Error: Missing time parameters");
+      }
+  });
+
   server.begin();
   Serial.println("Web server & OTA ready");
   showStatus("App ready");
@@ -1027,37 +1083,42 @@ void logSystemHealth() {
 }
 
 void loop() {
-  logSystemHealth(); // Monitoring aktiv
+  logSystemHealth(); 
   ElegantOTA.loop();
-  timeClient.update();
-  unsigned long currentEpoch = timeClient.getEpochTime();
+  
+  // We use the internal system clock (synced via /start)
+  time_t now;
+  time(&now); 
 
   // --- CASE 1: TRIGGER IMMEDIATE START (NOW) ---
-  // If triggerCountdown is true but showStartEpoch is 0, start immediately
   if (triggerCountdown && showStartEpoch == 0 && !showRunning) {
       Serial.println(F("Instant start triggered (NOW button)."));
-      triggerCountdown = false; // Reset trigger
-      startShowSequence();      // Helper function to keep loop clean
+      triggerCountdown = false; 
+      startShowSequence();      
   }
 
   // --- CASE 2: WAITING FOR SCHEDULED START (COUNTDOWN) ---
   if (showStartEpoch > 0 && !showRunning) {
-    long secondsLeft = showStartEpoch - currentEpoch;
+    time_t now = time(NULL); // System time synced via smartphone
+    long secondsLeft = showStartEpoch - now;
 
     if (secondsLeft > 0) {
-      // --- DISPLAY COUNTDOWN ---
+      // --- DISPLAY COUNTDOWN (Original Tesla Style) ---
       static unsigned long lastUpdate = 0;
       if (millis() - lastUpdate > 500) { 
         int mins = secondsLeft / 60;
         int secs = secondsLeft % 60;
         char buf[10];
         u8g2.clearBuffer();
+
         if (mins > 0) {
+          // MM:SS mode for 1 minute or more
           sprintf(buf, "%02d:%02d", mins, secs);
           u8g2.setFont(u8g2_font_logisoso24_tr);
           u8g2.drawStr(xOffset + 0, yOffset + 44, buf);
         } else {
-          sprintf(buf, "%02d", secs);
+          // Large seconds mode for the final 59 seconds
+          sprintf(buf, "%02d", (int)secs);
           u8g2.setFont(u8g2_font_logisoso32_tr);
           u8g2.drawStr(xOffset + 15, yOffset + 48, buf);
         }
@@ -1065,20 +1126,16 @@ void loop() {
         lastUpdate = millis();
       }
     } 
-    // SAFETY START: Start if we are within a small window (0 to -5 seconds)
-    else if (secondsLeft >= -5) {
-        showStartEpoch = 0;       // Reset epoch to stop countdown logic
-        triggerCountdown = false; // Reset trigger
-        startShowSequence();      // Start show
+    // --- TRIGGER START ---
+    else if (secondsLeft >= -2) {
+        showStartEpoch = 0;
+        triggerCountdown = false; 
+        startShowSequence(); 
     } 
-    // SYNC ERROR: If target time is more than 5 seconds in the past
     else {
-        Serial.printf("Sync Error: Time is %ld seconds in the past. Cancelling.\n", -secondsLeft);
+        // Sync Error logic
         stopShowAndCleanup();
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_6x10_tr);
-        u8g2.drawStr(xOffset, yOffset + 20, "SYNC ERROR");
-        u8g2.sendBuffer();
+        showStatus("SYNC ERROR");
         delay(2000);
         showStartEpoch = 0;
         triggerCountdown = false;
