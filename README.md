@@ -5,6 +5,12 @@
 [![GitHub Stars](https://img.shields.io/github/stars/Fhiel/myS3XY-Lightshow?style=for-the-badge&color=gold&logo=github)](https://github.com/Fhiel/myS3XY-Lightshow/stargazers)
 
 An open-source companion for Tesla Light Shows – bring the spectacular synchronized light show experience to **any vehicle**, RC car, or custom LED setup.
+---
+<img width="190" height="321" alt="image" src="https://github.com/user-attachments/assets/d5790efa-b21e-44a6-aad9-a65180e83c8a" /> <img width="350" height="300" alt="image" src="https://github.com/user-attachments/assets/85e6a9ff-aa47-4c61-8cdd-3b0d877cd703" />
+<img width="300" height="250" alt="image" src="https://github.com/user-attachments/assets/87c8ea1b-9e7f-4b0c-9a6f-ac13884cd955" />
+
+
+
 
 This project turns an inexpensive ESP32-C3 board with a small OLED display into a fully featured light show controller that:
 - **NTP-Synced:** Perfectly synchronizes with real Teslas using Network Time Protocol.
@@ -13,6 +19,7 @@ This project turns an inexpensive ESP32-C3 board with a small OLED display into 
 - **Smart Time Sync:** Automatically calculates UTC start times from your smartphone browser—no timezone settings required.
 - **OLED Feedback:** Authentic Tesla-style countdown (MM:SS → Large Seconds → "GO!").
 - **Flexible Mapping:** Map any LED to any Tesla channel via simple JSON files.
+- **Troubleshooting Sparse Files:** If you use a professional show and your LEDs stay dark or show wrong colors, your FSEQ might have a different channel layout. Use the Channel Analyzer to identify which channels are active and update your 'config.json' accordingly.
 - **Wireless Updates:** Full OTA (Over-the-Air) support for firmware, shows, and configurations.
 
 ---
@@ -26,12 +33,18 @@ This project turns an inexpensive ESP32-C3 board with a small OLED display into 
 ---
 
 ## 📂 Configuration Guide (Custom LED Layouts)
-
-The system uses **Absolute Mapping**. This means you map your physical LEDs directly to the global Tesla channel map found in the FSEQ file.
+The system uses **Absolute Mapping**. You map your physical LEDs directly to the global Tesla channel map. The controller automatically handles the colors based on the IDs you choose..
 **Core Concepts:**
+- **Smart Color Logic:** The controller handles the colors for you:
+  - **Amber:** IDs 139, 142, 339, 342 (Indicators).
+  - **Red:** IDs 300 - 399 (Tail, Brake, Rear Fog).
+  - **White/Blue:** IDs 0 - 299 (Main Beams, Matrix Animations, Sig).
+- **Flexible Setup:** You can create "Front-only", "Rear-only", or "Full-Car" setups just by listing the respective IDs in your JSON.
+- **Sequential Freedom:** You can mix Front and Rear LEDs on a single strip in any order.
 - **No Comments:** JSON files must not contain any comments (// or /* */). Use the structure below exactly.
-- **50:50 Split:** The controller automatically treats the first half of your defined LEDs as FRONT (White/Blue/Amber logic) and the second half as REAR (Red/Amber/White logic).
 - **Channel 9999:** Use this for "dead" LEDs or spacing on your strip.
+> [!IMPORTANT]
+>  Ensure the number of LEDs defined in your config.json matches your physical LED strip length. The controller uses the first half of your JSON entries for front animations and the rest for the rear.
 
 ### Common Tesla Channel Map (Absolute)
 | Section |Function | FSEQ Channel | Expected Color |
@@ -41,26 +54,30 @@ The system uses **Absolute Mapping**. This means you map your physical LEDs dire
 | **FRONT**| **Main Beams / Fog / Sig ** | 184 - 192 | Bright White |
 | **REAR** | **Tail / Brake Lights** | 164 - 183 | Red |
 | **REAR** | **Rear Indicators** | 339 (L), 342 (R) | Amber |
-| **REAR** | **Reverse Lights** | 390 - 391 | White |
+| **REAR** | **License / Reverse Lights** | 184, 390 - 391 | White |
 | **REAR** | **High Brake (Center)** | 392 | Red |
 
 
-### Example `config.json`
+### Example `config_all_28.json`(The "All-In-One" 25-LED Setup)
+This compact configuration maps every essential Tesla light function exactly once. It’s perfect for RC cars or small desktop models.
 ```json
 {
-  "name": "Tesla_64_Symmetric",
-  "max_brightness": 128,
-  "max_milliamps": 2500,
+  "name": "RC_S3XY_Compact_28",
   "channel_offset": 0,
+  "max_brightness": 128,
+  "max_milliamps": 1200,
   "leds": [
-    {"channel": 139},
-    {"channel": 164},
-    {"channel": 9999}
+    {"channel": 139}, {"channel": 164}, {"channel": 151}, {"channel": 152},
+    {"channel": 153}, {"channel": 154}, {"channel": 189}, {"channel": 192},
+    {"channel": 155}, {"channel": 158}, {"channel": 159}, {"channel": 160},
+    {"channel": 165}, {"channel": 142}, {"channel": 339}, {"channel": 364},
+    {"channel": 365}, {"channel": 370}, {"channel": 371}, {"channel": 390},
+    {"channel": 391}, {"channel": 392}, {"channel": 184}, {"channel": 184},
+    {"channel": 184}, {"channel": 184}, {"channel": 380}, {"channel": 342}
   ]
 }
 ```
-Note1: Use 9999 for "dead" LEDs or spacing on your strip. 
-Note2: The Data Pin is fixed to GPIO 2 for stability. Ensure your LED strip is connected to this pin.
+Note: Use 9999 for "dead" LEDs or spacing on your strip. 
 
 📱 Web Interface Manual
 - **Schedule Show: Select your .fseq file and a start time. The "START COUNTDOWN" button sends all data to the ESP32. The system uses Client-Side Time Synchronization to ensure perfect alignment between your smartphone and the controller, regardless of your local timezone.
@@ -83,11 +100,11 @@ If you are using a custom or modified FSEQ file and don't know the channel mappi
 
 ## 🚀 Getting Started
 
-#### 1. Optimize your FSEQ Files (The "Tesla Shrink")
-Official shows (like the Xmas 2025 show) are often >1.4 MB. To save memory and ensure smooth playback on the ESP32-C3:
-1. Open the `.fseq` show in **xLights**.
-2. Export as **FSEQ V1 (Uncompressed)**. *Note: ESP32 cannot handle Zstd-compressed V2 files in real-time.*
-3. Restrict the channel range (e.g., 0-512) to keep the file size <100 KB.
+#### 1. Prepare your FSEQ Files
+The controller is optimized for **FSEQ V1 (Uncompressed).**
+- **Size Limit:** Keep files under 1.5 MB for best stability on LittleFS.
+- **Official Shows:** Professional shows (like xLightshows.io) often use a "Sparse" format. Our v1.0.0 engine uses Stride Emulation to play these files perfectly for their full duration.
+- **Avoid V2 Compressed:** If your file is a .fseq V2 (Zstd), you must re-export it in xLights as V1 Uncompressed.
 
 #### 2. Connection & Best Practice (Outdoor Setup)
 Since light shows usually happen outdoors, the controller is pre-configured to connect to a mobile hotspot. This allows the ESP32 to fetch the precise NTP time for synchronization with real Teslas.
@@ -122,13 +139,11 @@ Android doesn't support local hostnames (mDNS) well. If you miss the IP on the d
 ---
 
 💡 Tricks and Tips
-Power: For >64 LEDs, use an external 5V power supply. Do not power long strips solely through the ESP32.
-
-International Sync: The web app uses UTC timestamps. It works in any timezone without manual adjustment.
+- **Power supply:** For >64 LEDs, use an external 5V power supply. Do not power long strips solely through the ESP32.
+- **International Sync:** The web app uses UTC timestamps. It works in any timezone without manual adjustment.
 
 ⚖️ License & Credits
-Logic: Inspired by the official Tesla Motors GitHub.
-
-Libraries: FastLED, ESPAsyncWebServer, ArduinoJson, ElegantOTA.
+- **Logic:** Inspired by the official Tesla Motors GitHub.
+- **Libraries:** FastLED, ESPAsyncWebServer, ArduinoJson, ElegantOTA.
 
 Let’s make every car part of the show! 🚗💡
