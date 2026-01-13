@@ -6,10 +6,36 @@
 
 An open-source companion for Tesla Light Shows – bring the spectacular synchronized light show experience to **any vehicle**, RC car, or custom LED setup.
 ---
-<img width="190" height="321" alt="image" src="https://github.com/user-attachments/assets/d5790efa-b21e-44a6-aad9-a65180e83c8a" /> <img width="175" height="150" alt="image" src="https://github.com/user-attachments/assets/85e6a9ff-aa47-4c61-8cdd-3b0d877cd703" />
-<img width="150" height="125" alt="image" src="https://github.com/user-attachments/assets/87c8ea1b-9e7f-4b0c-9a6f-ac13884cd955" />
-
-
+<table style="border: none; border-collapse: collapse; width: 100%;">
+  <tr style="border: none;">
+    <td style="border: none; vertical-align: top; width: 50%;">
+      <p align="center">
+        <b>ESP32 Controller & Display</b><br>
+        <img src="https://github.com/user-attachments/assets/8b7cc11b-ccce-4d68-94e8-0f6a76c71da0" width="250">
+      </p>
+    </td>
+    <td style="border: none; vertical-align: top; width: 50%;">
+      <p align="center">
+        <b>Mobile Web App UI</b><br>
+        <img src="https://github.com/user-attachments/assets/d5790efa-b21e-44a6-aad9-a65180e83c8a" width="210">
+      </p>
+    </td>
+  </tr>
+  <tr style="border: none;">
+    <td style="border: none; vertical-align: top;">
+      <p align="center">
+        <b>ESP32-C3 Core</b><br>
+        <img src="https://github.com/user-attachments/assets/85e6a9ff-aa47-4c61-8cdd-3b0d877cd703" width="200">
+      </p>
+    </td>
+    <td style="border: none; vertical-align: top;">
+      <p align="center">
+        <b>WS2812B</b><br>
+        <img src="https://github.com/user-attachments/assets/87c8ea1b-9e7f-4b0c-9a6f-ac13884cd955" width="180">
+      </p>
+    </td>
+  </tr>
+</table>
 
 
 This project turns an inexpensive ESP32-C3 board with a small OLED display into a fully featured light show controller that:
