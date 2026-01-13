@@ -1,0 +1,15 @@
+{
+  "name": "RC_S3XY_Compact_25",
+  "channel_offset": 0,
+  "max_brightness": 128,
+  "max_milliamps": 1200,
+  "leds": [
+    {"channel": 139}, {"channel": 164}, {"channel": 151}, {"channel": 152},
+    {"channel": 153}, {"channel": 154}, {"channel": 189}, {"channel": 192},
+    {"channel": 155}, {"channel": 158}, {"channel": 159}, {"channel": 160},
+    {"channel": 165}, {"channel": 142}, 
+    {"channel": 339}, {"channel": 364}, {"channel": 365}, {"channel": 370}, 
+    {"channel": 371}, {"channel": 390}, {"channel": 391}, {"channel": 392}, 
+    {"channel": 184}, {"channel": 380}, {"channel": 342}
+  ]
+}
