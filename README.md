@@ -166,8 +166,8 @@ Since light shows usually happen outdoors, the controller is pre-configured to c
   * Choose your uploaded show file and the correct hardware config from the dropdown menus.
   * The status pill will update to "READY (YourConfig.json)".
 3. **Trigger the Magic:** 
-  * **NOW:** Tap for an immediate start.
-  * **START COUNTDOWN:** Select a time (e.g., 2 minutes ahead) and tap to sync with other cars. The OLED will show the official Tesla style countdown sequence (MM:SS → Large Seconds → "GO!").
+  * **NOW** Tap for an immediate start.
+  * **START COUNTDOWN** Select a time (e.g., 2 minutes ahead) and tap to sync with other cars. The OLED will show the official Tesla style countdown sequence (MM:SS → Large Seconds → "GO!").
 
 ---
 
@@ -192,7 +192,7 @@ If you are using a custom or modified FSEQ file and don't know the channel mappi
 ---
 ## 💡 Pro-Tip: Optimize large FSEQ files
 > [!TIP]
-> **Saving Space:* If your favorite show is larger than 1.5 MB, you can easily shrink it using xLights without losing any visible quality:
+> **Saving Space:** If your favorite show is larger than 1.5 MB, you can easily shrink it using xLights without losing any visible quality:
 >  1. Open **xLights** and load your sequence.
 >  2. Go to **Setup** and ensure your "Network" is set to the channels you actually use (e.g., 512).
 >  3. In the **Controller** tab, make sure "Full xLights Support" is NOT active for unnecessary channels.
