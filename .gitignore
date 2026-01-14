@@ -404,3 +404,6 @@ data/*
 # Ignore firmware binaries
 *.bin
 *.elf
+
+# Ignore PlatformIO workspace file
+*.code-workspace
