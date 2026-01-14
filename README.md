@@ -132,23 +132,30 @@ This compact configuration maps every essential Tesla light function exactly onc
 
 ## 🚀 Getting Started
 
+>[!TIP] 
+> Easy Installation: If you are a new user or have a fresh ESP32-C3 board, you don't need to set up a development environment.
+> 1. Download the full_install_v1.0.1.bin from the Latest Release.
+> 2. Use the **[ESPHome Web Flasher](https://web.esphome.io/)** to flash the file in one step (Firmware + Web-UI).
+> 3. For future updates, simply use the OTA Update button within the Web App and upload the smaller firmware.bin.
+
 #### 1. Prepare your FSEQ Files
 The controller is optimized for **FSEQ V1 (Uncompressed).**
-- **Size Limit:** Keep files under 1.5 MB for best stability on LittleFS.
-- **Official Shows:** Professional shows (like xLightshows.io) often use a "Sparse" format. Our v1.0.0 engine uses Stride Emulation to play these files perfectly for their full duration.
-- **Avoid V2 Compressed:** If your file is a .fseq V2 (Zstd), you must re-export it in xLights as V1 Uncompressed.
+- **Size Limit:** Keep files under 1.5 MB for best stability. If your file is too large, see our **[Optimization Guide](#-pro-tip-optimize-large-fseq-files)**.
+- **Official Shows:** Professional shows often use a "Sparse" format. Our engine uses Stride Emulation to play these perfectly.
+- **Avoid V2 Compressed:** If your file is a .fseq V2 (Zstd), you must **[re-export it in xLights](#-pro-tip-optimize-large-fseq-files)** as V1 Uncompressed.
 
 #### 2. Connection & Best Practice (Outdoor Setup)
-Since light shows usually happen outdoors, the controller is pre-configured to connect to a mobile hotspot. This allows the ESP32 to fetch the precise NTP time for synchronization with real Teslas.
+Since light shows usually happen outdoors, the controller is pre-configured to connect to a mobile hotspot. This allows the ESP32 and your smartphone to communicate on the same network for **millisecond-precise browser-based time synchronization**.
 
 **Pre-configured Credentials:**
 - **SSID:** `LIGHTSHOW`
 - **Password:** `mys3xyls`
-- **Hostname:** 'mys3xy.local'
+- **Hostname:** `mys3xy.local`
 
 **How to find the Web App:**
 1. **Check the OLED Display:** Once connected, the ESP32 will show its assigned **IP Address** (e.g., `192.168.178.42`) and the hostname 'mys3xy.local' directly on the screen.
-2. **Open Browser:** Type this IP address into your mobile browser's address bar or try 'mys3xy.local' if your device supports this.
+2. **Open Browser:** Type this IP address into your mobile browser's address bar or try `mys3xy.local` if your device supports this.
+3. **Android Users:** If `mys3xy.local` does not work, please refer to the **[Android Connectivity Tip](#-android--connectivity)**.
 
 #### 3. Launching Your First Show
 1. **Inital Upload:** 
@@ -176,14 +183,16 @@ If you are using a custom or modified FSEQ file and don't know the channel mappi
 > [!TIP]
 > **Power management:** For setups with more than 64 LEDs, use an external 5V power source. The ESP32's onboard regulator is not designed for high-current LED strips.
 ---
+## 📱 Android & Connectivity
 > [!TIP]
->  **Android & Connectivity:** Android often fails to resolve .local hostnames (mDNS). If you cannot reach mys3xy.local:
+>  **mDNS Issues:** Android often fails to resolve .local hostnames (mDNS). If you cannot reach mys3xy.local:
 >  1. Go to your phone's **Mobile Hotspot** settings.
 >  2. Check **Connected Devices** for an entry like `esp32c3-xxxxxx`.
 >  3. Tap the **Info (i)** icon to see the IP.
 ---
+## 💡 Pro-Tip: Optimize large FSEQ files
 > [!TIP]
-> **Optimize large FSEQ files:* If your favorite show is larger than 1.5 MB, you can easily shrink it using xLights without losing any visible quality:
+> **Saving Space:* If your favorite show is larger than 1.5 MB, you can easily shrink it using xLights without losing any visible quality:
 >  1. Open **xLights** and load your sequence.
 >  2. Go to **Setup** and ensure your "Network" is set to the channels you actually use (e.g., 512).
 >  3. In the **Controller** tab, make sure "Full xLights Support" is NOT active for unnecessary channels.
@@ -204,4 +213,9 @@ If you are using a custom or modified FSEQ file and don't know the channel mappi
   - [ElegantOTA](https://github.com/ayushsharma82/ElegantOTA) - Effortless wireless firmware updates.
   - [ArduinoJson](https://arduinojson.org/) - High-performance configuration handling.
 ---
-Let’s make every car part of the show! 🚗💡
+
+## Upcoming: 
+🎵 Local Audio Sync Play the matching soundtrack directly from your smartphone's local storage, perfectly synced with the ESP32 lightshow. Use your phone's Bluetooth to connect to external speakers for the full experience.
+
+---
+# Let’s make every car part of the show! 🚗💡
