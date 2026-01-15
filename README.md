@@ -96,11 +96,11 @@ The system uses **Absolute Mapping**. You map your physical LEDs directly to the
 | **REAR** | **High Brake (Center)** | 392 | Red |
 
 
-### Example `config_all_28.json` (The "All-In-One" 25-LED Setup)
+### Example `config_all_25.json` (The "All-In-One" 25-LED Setup)
 This compact configuration maps every essential Tesla light function exactly once. It’s perfect for RC cars or small desktop models.
 ```json
 {
-  "name": "RC_S3XY_Compact_28",
+  "name": "RC_S3XY_Compact_25",
   "channel_offset": 0,
   "max_brightness": 128,
   "max_milliamps": 1200,
@@ -108,10 +108,10 @@ This compact configuration maps every essential Tesla light function exactly onc
     {"channel": 139}, {"channel": 164}, {"channel": 151}, {"channel": 152},
     {"channel": 153}, {"channel": 154}, {"channel": 189}, {"channel": 192},
     {"channel": 155}, {"channel": 158}, {"channel": 159}, {"channel": 160},
-    {"channel": 165}, {"channel": 142}, {"channel": 339}, {"channel": 364},
-    {"channel": 365}, {"channel": 370}, {"channel": 371}, {"channel": 390},
-    {"channel": 391}, {"channel": 392}, {"channel": 184}, {"channel": 184},
-    {"channel": 184}, {"channel": 184}, {"channel": 380}, {"channel": 342}
+    {"channel": 165}, {"channel": 142}, 
+    {"channel": 339}, {"channel": 364}, {"channel": 365}, {"channel": 370}, 
+    {"channel": 371}, {"channel": 390}, {"channel": 391}, {"channel": 392}, 
+    {"channel": 184}, {"channel": 380}, {"channel": 342}
   ]
 }
 ```
@@ -134,9 +134,10 @@ This compact configuration maps every essential Tesla light function exactly onc
 
 >[!TIP] 
 > Easy Installation: If you are a new user or have a fresh ESP32-C3 board, you don't need to set up a development environment.
-> 1. Download the full_install_v1.0.1.bin from the Latest Release.
-> 2. Use the **[ESPHome Web Flasher](https://web.esphome.io/)** to flash the file in one step (Firmware + Web-UI).
-> 3. For future updates, simply use the OTA Update button within the Web App and upload the smaller firmware.bin.
+> 1. Download the `full_install_v1.x.x.bin` from the Latest Release.
+> 2. Open the **[ESPHome Web Flasher](https://web.esphome.io/)**
+> 3. Use **CONNECT** and **INSTALL** to flash the file in one step (Firmware + Web-UI).
+> 4. For future updates, simply use the OTA Update button within the Web App and upload the smaller `firmware.bin`.
 
 #### 1. Prepare your FSEQ Files
 The controller is optimized for **FSEQ V1 (Uncompressed).**
